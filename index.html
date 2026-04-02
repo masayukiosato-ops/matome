@@ -205,6 +205,15 @@
             font-size: 0.9em;
         }
         
+        .ai-settings-box {
+            margin-top: 20px;
+            margin-bottom: 15px;
+            padding: 15px;
+            background-color: #f0e6f6;
+            border: 1px solid #c39bd3;
+            border-radius: 6px;
+        }
+
         .sentiment-positive { background-color: #d4edda; color: #155724; }
         .sentiment-negative { background-color: #f8d7da; color: #721c24; }
         .sentiment-neutral { background-color: #e2e3e5; color: #383d41; }
@@ -306,6 +315,24 @@
                 <textarea id="self-talk" rows="3" placeholder="その状況でのあなたの心の中での対話や考えを書いてください"></textarea>
             </div>
             
+            <!-- AI設定 -->
+            <div class="ai-settings-box">
+                <h4 style="margin:0 0 10px;">🤖 AI設定</h4>
+                <div class="form-group">
+                    <label for="ai-provider">使用するAI：</label>
+                    <select id="ai-provider" onchange="onProviderChange()">
+                        <option value="claude">Claude（このページで自動利用）</option>
+                        <option value="gemini">Gemini 2.5 Flash（無料）</option>
+                        <option value="openai">GPT-4o mini（有料）</option>
+                    </select>
+                </div>
+                <div id="api-key-group" class="form-group hidden">
+                    <label for="api-key" id="api-key-label">APIキー：</label>
+                    <input type="password" id="api-key" placeholder="APIキーを入力してください">
+                    <small id="api-key-hint" style="color:#666;display:block;margin-top:4px;"></small>
+                </div>
+            </div>
+
             <button id="analyze-btn" onclick="analyzeEmotions()">基本分析</button>
             <button id="ai-analyze-btn" class="ai-button" onclick="aiAnalyzeEmotions()">AI分析</button>
         </div>
@@ -637,4 +664,278 @@
             if (triggers) analysis += `<li>直接的なトリガー：${triggers}</li>`;
             if (pastExperiences) analysis += `<li>類似した過去の経験：${pastExperiences}</li>`;
             if (values) analysis += `<li>触れられた重要な価値観：${values}</li>`;
-            if (selfTalk)
+            if (selfTalk) analysis += `<li>内部対話のパターン：${selfTalk}</li>`;
+            analysis += `</ul>`;
+            
+            return analysis;
+        }
+        
+        // AIプロバイダーが変わったときの処理
+        function onProviderChange() {
+            const provider = document.getElementById('ai-provider').value;
+            const keyGroup = document.getElementById('api-key-group');
+            const keyLabel = document.getElementById('api-key-label');
+            const keyHint  = document.getElementById('api-key-hint');
+
+            if (provider === 'claude') {
+                keyGroup.classList.add('hidden');
+            } else if (provider === 'gemini') {
+                keyGroup.classList.remove('hidden');
+                keyLabel.textContent = 'Gemini APIキー：';
+                keyHint.textContent = 'Google AI Studio（aistudio.google.com）で無料取得できます。';
+            } else if (provider === 'openai') {
+                keyGroup.classList.remove('hidden');
+                keyLabel.textContent = 'OpenAI APIキー：';
+                keyHint.textContent = 'platform.openai.com でAPIキーを取得してください。';
+            }
+        }
+
+        // Claude API呼び出し
+        async function callClaudeAPI(prompt) {
+            const response = await fetch("https://api.anthropic.com/v1/messages", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    model: "claude-sonnet-4-20250514",
+                    max_tokens: 1000,
+                    messages: [{ role: "user", content: prompt }]
+                })
+            });
+            const data = await response.json();
+            return data.content.map(i => i.text || "").join("\n");
+        }
+
+        // Gemini API呼び出し
+        async function callGeminiAPI(prompt, apiKey) {
+            const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-04-17:generateContent?key=${apiKey}`;
+            const response = await fetch(url, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    contents: [{ parts: [{ text: prompt }] }]
+                })
+            });
+            const data = await response.json();
+            if (data.error) throw new Error(data.error.message);
+            return data.candidates[0].content.parts[0].text;
+        }
+
+        // OpenAI API呼び出し
+        async function callOpenAIAPI(prompt, apiKey) {
+            const response = await fetch("https://api.openai.com/v1/chat/completions", {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    "Authorization": `Bearer ${apiKey}`
+                },
+                body: JSON.stringify({
+                    model: "gpt-4o-mini",
+                    max_tokens: 1000,
+                    messages: [{ role: "user", content: prompt }]
+                })
+            });
+            const data = await response.json();
+            if (data.error) throw new Error(data.error.message);
+            return data.choices[0].message.content;
+        }
+
+        // AIプロバイダーを選択してAPI呼び出し
+        async function callAI(prompt) {
+            const provider = document.getElementById('ai-provider').value;
+            const apiKey   = document.getElementById('api-key').value.trim();
+
+            if (provider !== 'claude' && !apiKey) {
+                throw new Error('APIキーを入力してください。');
+            }
+
+            if (provider === 'claude')  return callClaudeAPI(prompt);
+            if (provider === 'gemini')  return callGeminiAPI(prompt, apiKey);
+            if (provider === 'openai')  return callOpenAIAPI(prompt, apiKey);
+        }
+
+        // AI分析（プロバイダー共通）
+        async function generateAIAnalysisFromAPI(situation, emotions, primaryEmotion, intensity, bodyResponse, triggers, pastExperiences, values, selfTalk) {
+            const prompt = `あなたはリフレクション支援の専門家です。以下の情報をもとに、ギブスのリフレクションサイクルの「感情」ステップについて深い分析を行ってください。
+
+【状況の説明】
+${situation}
+
+【感じた感情】
+${emotions}
+
+【主な感情】${primaryEmotion}（強さ：${intensity}/10）
+
+【身体的反応】
+${bodyResponse || '記入なし'}
+
+【感情のトリガー】
+${triggers || '記入なし'}
+
+【類似した過去の経験】
+${pastExperiences || '記入なし'}
+
+【触れられた価値観・信念】
+${values || '記入なし'}
+
+【内部対話】
+${selfTalk || '記入なし'}
+
+以下の4つのセクションで分析してください。各セクションはHTMLのpタグやulタグを使って記述してください：
+
+1. mainAnalysis：感情の深い背景、心理的メカニズム、感情の意味について200字程度で分析
+2. sentimentAnalysis：感情の極性（ポジティブ/ネガティブ/複合）とその特徴をspanタグのバッジで表示
+3. keywordsAnalysis：重要な感情キーワードをspanタグのバッジ形式で5〜8個抽出
+4. cognitiveAnalysis：思考パターンの特徴と成長につながる気づきを200字程度で分析
+
+必ず以下のJSON形式のみで返してください（他のテキストは不要）：
+{"mainAnalysis":"...","sentimentAnalysis":"...","keywordsAnalysis":"...","cognitiveAnalysis":"..."}`;
+
+            const text = await callAI(prompt);
+            const clean = text.replace(/```json|```/g, "").trim();
+            return JSON.parse(clean);
+        }
+
+        // AI分析ボタンのハンドラ（非同期版）
+        async function aiAnalyzeEmotions() {
+            const situation = document.getElementById('situation').value;
+            const emotions = document.getElementById('emotions').value;
+            let primaryEmotion = document.getElementById('primary-emotion').value;
+            const intensity = document.getElementById('intensity').value;
+            const bodyResponse = document.getElementById('body-response').value;
+            const triggers = document.getElementById('triggers').value;
+            const pastExperiences = document.getElementById('past-experiences').value;
+            const values = document.getElementById('values').value;
+            const selfTalk = document.getElementById('self-talk').value;
+            
+            if (!situation || !emotions || !primaryEmotion) {
+                alert('状況、感情、主な感情は必須入力項目です。');
+                return;
+            }
+            if (primaryEmotion === 'その他') {
+                const otherEmotion = document.getElementById('other-emotion').value;
+                if (!otherEmotion) { alert('その他の感情を入力してください。'); return; }
+                primaryEmotion = otherEmotion;
+            }
+
+            // 基本分析
+            const basicAnalysisResult = generateAnalysis(situation, emotions, primaryEmotion, intensity, bodyResponse, triggers, pastExperiences, values, selfTalk);
+            document.getElementById('emotion-analysis-result').innerHTML = basicAnalysisResult;
+            document.getElementById('analysis-loading').classList.remove('hidden');
+            document.getElementById('results-container').classList.remove('hidden');
+            document.getElementById('ai-analysis-container').classList.add('hidden');
+            document.getElementById('results-container').scrollIntoView({ behavior: 'smooth' });
+
+            try {
+                const aiResult = await generateAIAnalysisFromAPI(situation, emotions, primaryEmotion, intensity, bodyResponse, triggers, pastExperiences, values, selfTalk);
+                document.getElementById('ai-analysis-result').innerHTML = aiResult.mainAnalysis;
+                document.getElementById('sentiment-result').innerHTML = aiResult.sentimentAnalysis;
+                document.getElementById('keywords-result').innerHTML = aiResult.keywordsAnalysis;
+                document.getElementById('cognitive-result').innerHTML = aiResult.cognitiveAnalysis;
+            } catch (err) {
+                document.getElementById('ai-analysis-result').innerHTML = '<p style="color:red;">AI分析中にエラーが発生しました。もう一度お試しください。</p>';
+                console.error(err);
+            } finally {
+                document.getElementById('analysis-loading').classList.add('hidden');
+                document.getElementById('ai-analysis-container').classList.remove('hidden');
+            }
+        }
+
+        // サマリー生成
+        function generateSummary() {
+            const situation = document.getElementById('situation').value;
+            let primaryEmotion = document.getElementById('primary-emotion').value;
+            if (primaryEmotion === 'その他') primaryEmotion = document.getElementById('other-emotion').value;
+            const intensity = document.getElementById('intensity').value;
+            const reflection = document.getElementById('reflection').value;
+            const learning = document.getElementById('learning').value;
+            const futureResponse = document.getElementById('future-response').value;
+            const now = new Date().toLocaleString('ja-JP');
+
+            let summary = `<p><strong>記録日時：</strong>${now}</p>`;
+            summary += `<h3>1. 状況の説明</h3><p>${situation || '記入なし'}</p>`;
+            summary += `<h3>2. 感情</h3><p>主な感情：<strong>${primaryEmotion}</strong>（強さ：${intensity}/10）</p>`;
+            if (reflection) summary += `<h3>3. 振り返り</h3><p>${reflection}</p>`;
+            if (learning) summary += `<h3>4. 学び</h3><p>${learning}</p>`;
+            if (futureResponse) summary += `<h3>5. 将来の対応計画</h3><p>${futureResponse}</p>`;
+
+            document.getElementById('summary-content').innerHTML = summary;
+            document.getElementById('summary-container').classList.remove('hidden');
+            document.getElementById('summary-container').scrollIntoView({ behavior: 'smooth' });
+        }
+
+        // 分析を保存する
+        function saveAnalysis() {
+            const situation = document.getElementById('situation').value;
+            let primaryEmotion = document.getElementById('primary-emotion').value;
+            if (primaryEmotion === 'その他') primaryEmotion = document.getElementById('other-emotion').value;
+            const intensity = document.getElementById('intensity').value;
+            const reflection = document.getElementById('reflection').value;
+            const learning = document.getElementById('learning').value;
+            const now = new Date();
+
+            const analysis = {
+                id: Date.now(),
+                date: now.toLocaleString('ja-JP'),
+                situation: situation,
+                emotion: primaryEmotion,
+                intensity: intensity,
+                reflection: reflection,
+                learning: learning
+            };
+
+            savedAnalyses.push(analysis);
+            localStorage.setItem('emotionAnalyses', JSON.stringify(savedAnalyses));
+            updateHistoryList();
+            alert('分析が保存されました。');
+        }
+
+        // 履歴リストを更新する
+        function updateHistoryList() {
+            const historyList = document.getElementById('history-list');
+            if (savedAnalyses.length === 0) {
+                historyList.innerHTML = '<p>まだ履歴がありません。</p>';
+                return;
+            }
+            let html = '<table><tr><th>日時</th><th>主な感情</th><th>強さ</th><th>状況（抜粋）</th></tr>';
+            [...savedAnalyses].reverse().forEach(a => {
+                html += `<tr><td>${a.date}</td><td>${a.emotion}</td><td>${a.intensity}/10</td><td>${(a.situation || '').substring(0, 50)}...</td></tr>`;
+            });
+            html += '</table>';
+            historyList.innerHTML = html;
+        }
+
+        // パターン分析
+        function analyzeEmotionPatterns() {
+            const result = document.getElementById('patterns-result');
+            if (savedAnalyses.length < 2) {
+                result.innerHTML = '<p>パターン分析には2件以上の記録が必要です。</p>';
+                result.classList.remove('hidden');
+                return;
+            }
+            const emotionCount = {};
+            savedAnalyses.forEach(a => {
+                emotionCount[a.emotion] = (emotionCount[a.emotion] || 0) + 1;
+            });
+            const topEmotion = Object.entries(emotionCount).sort((a,b) => b[1]-a[1])[0];
+            let html = `<p>合計 <strong>${savedAnalyses.length}件</strong> の記録を分析しました。</p>`;
+            html += `<p>最も多く記録された感情：<strong>${topEmotion[0]}（${topEmotion[1]}回）</strong></p>`;
+            html += '<p>感情の内訳：';
+            Object.entries(emotionCount).forEach(([e, c]) => {
+                html += `<span class="badge">${e}：${c}回</span>`;
+            });
+            html += '</p>';
+            result.innerHTML = html;
+            result.classList.remove('hidden');
+        }
+
+        // 印刷
+        function printSummary() { window.print(); }
+
+        // PDFに保存
+        function saveToPDF() {
+            alert('印刷ダイアログで「PDFとして保存」を選択してください。');
+            window.print();
+        }
+    </script>
+</body>
+</html>
